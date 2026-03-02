@@ -5,31 +5,24 @@ import pickle
 
 # ładowanie danych
 try:
-    with open('dane.pkl', 'rb') as f:
-        df = pickle.load(f)
+    with open('dane_eda.pkl', 'rb') as f:
+        df_eda = pickle.load(f)
     print("Dane wczytane! Masz dostęp do zmiennej 'df'.")
 except FileNotFoundError:
     print("Błąd: Plik 'dane.pkl' nie istnieje. Uruchom najpierw pobieranie.")
 
-# 1. Wczytanie danych przetworzonych
-# Zakładamy, że plik 'final_suicide_features.csv' jest w tym samym folderze
-df = pd.read_csv('final_suicide_features.csv')
+# Agregacja danych do średnich krajowych na rok
+df_annual = df_eda.groupby('Rok').mean(numeric_only=True).reset_index()
 
-# 2. Agregacja danych do średnich krajowych na rok
-df_annual = df.groupby('Rok').mean(numeric_only=True).reset_index()
-
-# Ustawienie stylu wizualnego
 sns.set_theme(style="whitegrid")
 
-# --- WYKRES 1: ZMIANY DEMOGRAFICZNE ---
+# --- WYKRES 1: STRUKTURA WIEKU ---
 plt.figure(figsize=(12, 6))
-# plt.plot(df_annual['Rok'], df_annual['male_pct'], marker='o', label='Mężczyźni (%)', linewidth=2, color='#0055CC')
-plt.plot(df_annual['Rok'], df_annual['youth_pct'], marker='s', label='Młodzież 0-18 (%)', linestyle='--', color='#CC8800')
-plt.plot(df_annual['Rok'], df_annual['young_adult_pct'], marker='^', label='Młodzi dorośli 19-34 (%)', linestyle='--', color='#009966')
-plt.plot(df_annual['Rok'], df_annual['middle_age_pct'], marker='d', label='Wiek średni 35-59 (%)', linestyle='--', color='#CC5500')
-plt.plot(df_annual['Rok'], df_annual['senior_pct'], marker='v', label='Seniorzy 60+ (%)', linestyle='--', color='#CC77AA')
+age_cols = ['youth_pct', 'young_adult_pct', 'middle_age_pct', 'senior_pct']
+plt.stackplot(df_annual['Rok'], [df_annual[c] for c in age_cols], 
+              labels=['Młodzież', 'Młodzi dorośli', 'Wiek średni', 'Seniorzy'], alpha=0.7)
 
-plt.title('Zmiany demograficzne w zamachach samobójczych (Średnie roczne)', fontsize=14)
+plt.title('Struktura Wieku Osób Podejmujących Zamachy Samobójcze (Średnie roczne)', fontsize=14)
 plt.xlabel('Rok', fontsize=12)
 plt.ylabel('Udział w ogólnej liczbie zamachów', fontsize=12)
 plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
@@ -37,22 +30,39 @@ plt.grid(True, linestyle=':', alpha=0.6)
 plt.tight_layout()
 plt.savefig('wykres_demografia.png', dpi=300)
 
-# --- WYKRES 2: CZYNNIKI ZEWNĘTRZNE I SOCJOEKONOMICZNE ---
+# --- WYKRES 2: EDUKACJA ---
 plt.figure(figsize=(12, 6))
-plt.plot(df_annual['Rok'], df_annual['substances_pct'], marker='o', label='Pod wpływem substancji (%)', color='orange', linewidth=2)
-plt.plot(df_annual['Rok'], df_annual['SES_instability_index'], marker='x', label='Indeks niestabilności SES', color='red', linewidth=2)
-plt.plot(df_annual['Rok'], df_annual['institution_contact_pct'], marker='s', label='Kontakt z instytucjami (%)', color='green')
-plt.plot(df_annual['Rok'], df_annual['weekend_pct'], marker='*', label='Zamachy w weekendy (%)', color='purple')
-plt.plot(df_annual['Rok'], df_annual['education_higher_pct'], marker='D', label='Wykształcenie wyższe (%)', color='blue')
+plt.plot(df_annual['Rok'], df_annual['edu_low_pct'], marker='o', label='Wykształcenie podstawowe (%)', color='orange', linewidth=2)
+plt.plot(df_annual['Rok'], df_annual['edu_mid_pct'], marker='x', label='Wykształcenie średnie (%)', color='red', linewidth=2)
+plt.plot(df_annual['Rok'], df_annual['edu_higher_pct'], marker='s', label='Wykształcenie wyższe (%)', color='green')
+#plt.plot(df_annual['Rok'], df_annual['edu_unknown_pct'], marker='*', label='Wykształcenie - brak danych (%)', color='purple')
 
-plt.title('Czynniki zewnętrzne i socjoekonomiczne (Średnie roczne)', fontsize=14)
+plt.title('Trend udziału w zamachach samobójczych w zależności od wykształcenia (2017-2025)', fontsize=14)
 plt.xlabel('Rok', fontsize=12)
 plt.ylabel('Wartość wskaźnika', fontsize=12)
 plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
 plt.grid(True, linestyle=':', alpha=0.6)
 plt.tight_layout()
-plt.savefig('wykres_czynniki_zewnetrzne.png', dpi=300)
+plt.savefig('wykres_edukacja.png', dpi=300)
 
+
+# --- WYKRES 3: AREA CHART DLA PŁCI
+plt.figure(figsize=(10, 6))
+plt.fill_between(df_annual['Rok'], df_annual['male_pct'], label='Mężczyźni', color='skyblue', alpha=0.6)
+plt.fill_between(df_annual['Rok'], 1 - df_annual['female_pct'], 1, label='Kobiety', color='pink', alpha=0.6)
+plt.title('Trend udziału płci w zamachach samobójczych (2017-2025)', fontsize=14)
+plt.ylabel('Udział procentowy', fontsize=12)
+plt.ylim(0, 1)
+plt.legend(loc='lower left')
+plt.savefig('wykres_plec.png', dpi=300)
+
+# --- WYKRES 4: Trend Śmiertelności ---
+plt.figure(figsize=(10, 6))
+sns.lineplot(data=df_annual, x='Rok', y='target_mortality_rate', marker='o', color='red')
+plt.ylim(0, 1)
+plt.title('Trend Śmiertelności Zamachów Samobójczych w Polsce (Średnia Wojewódzka)')
+plt.ylabel('Skuteczność prób (Zgony / Ogółem)')
+plt.savefig('wykres_smiertelnosc_srednia.png', dpi=300)
 
 
 print("Wykresy zostały wygenerowane i zapisane.")

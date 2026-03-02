@@ -33,39 +33,24 @@ kwp_to_wojewodztwo = {
 }
 
 def clean_load(path):
-    """Wczytuje Excel i czyści nazwy kolumn ze wszystkich białych znaków."""
+    """Wczytuje Excel i czyści nazwy kolumn."""
     if not os.path.exists(path):
         print(f"❌ Nie znaleziono pliku: {path}")
         return None
-    
     print(f"Wczytywanie: {path}...")
     df = pd.read_excel(path)
-    
-    # Czyszczenie nazw kolumn: zamiana \n na spację, usuwanie podwójnych spacji i strip
-    df.columns = [
-        " ".join(str(c).replace('\n', ' ').split()).strip() 
-        for c in df.columns
-    ]
-    
-    # Standaryzacja kluczowych kolumn
-    if 'KWP' in df.columns:
-        df['KWP'] = df['KWP'].astype(str).str.strip()
-    
+    # Standaryzacja nazw (usuwanie enterów, podwójnych spacji)
+    df.columns = [" ".join(str(c).replace('\n', ' ').split()).strip() for c in df.columns]
+    if 'KWP' in df.columns: df['KWP'] = df['KWP'].astype(str).str.strip()
     if 'Rok' in df.columns:
         df['Rok'] = pd.to_numeric(df['Rok'], errors='coerce')
-        # Usuwamy wiersze bez roku i sumaryczne dla Polski
-        df = df[df['Rok'].notna()]
-        df = df[~df['KWP'].str.contains('Polska', case=False, na=False)]
+        df = df[df['Rok'].notna() & ~df['KWP'].str.contains('Polska', case=False, na=False)]
         df['Rok'] = df['Rok'].astype(int)
-    
     return df
 
-def find_col(df, keyword):
-    """Pomocnicza funkcja do znajdowania kolumny po fragmencie nazwy."""
-    for c in df.columns:
-        if keyword.lower() in c.lower():
-            return c
-    return None
+def find_cols(df, keywords):
+    """Znajduje unikalne nazwy kolumn zawierające słowa kluczowe."""
+    return list(set([c for c in df.columns if any(k.lower() in c.lower() for k in keywords)]))
 
 def create_features_eda(files_dict):
     df_age = clean_load(files_dict["wiek_dni"])
@@ -73,106 +58,85 @@ def create_features_eda(files_dict):
     df_details = clean_load(files_dict["detale"])
     df_edu = clean_load(files_dict["edukacja"])
 
-    if any(d is None for d in [df_age, df_deaths, df_details, df_edu]):
-        return None
+    if any(d is None for d in [df_age, df_deaths, df_details, df_edu]): return None
 
-    # Dynamiczne znajdowanie głównych kolumn
-# Znajdowanie kolumn bazowych (surowe liczby)
-    C_TOTAL = find_col(df_age, "ogółem (PRÓBY I ZAKOŃCZONE ZGONEM)")
-    C_DEATHS = find_col(df_deaths, "zakończonych zgonem")
-    C_HIGHER_EDU = find_col(df_edu, "Wykształcenie - Wyższe")
-    C_MALE = find_col(df_details, "W tym mężczyzn")
-    C_FEMALE = find_col(df_details, "W tym kobiet")
-    C_SOBER = find_col(df_details, "Trzeźwy(a)")
-    C_SINGLE = find_col(df_edu, "Kawaler/panna")
-    C_UNEMPLOYED = find_col(df_edu, "Bezrobotny")
+    # 1. Znajdowanie kolumn bazowych
+    C_TOTAL = [c for c in df_age.columns if "ogółem (PRÓBY I ZAKOŃCZONE ZGONEM)" in c][0]
+    C_DEATHS = [c for c in df_deaths.columns if "zakończonych zgonem" in c][0]
+    C_MALE = find_cols(df_details, ["mężczyzn"])[0]
+    C_FEMALE = find_cols(df_details, ["kobiet"])[0]
+    C_SOBER = find_cols(df_details, ["Trzeźwy"])[0]
 
+    # 2. Kategorie wykształcenia
+    edu_low = find_cols(df_edu, ["Podstawowe", "Gimnazjalne"])
+    edu_mid = find_cols(df_edu, ["Zasadnicze zawodowe", "Średnie", "Policealne"])
+    edu_high = find_cols(df_edu, ["Wyższe"])
+    edu_unkn = find_cols(df_edu, ["Wykształcenie-Brak danych", "nieustalone"])
+    all_edu_raw = list(set(edu_low + edu_mid + edu_high + edu_unkn))
 
-    # Łączenie
+    # 3. Łączenie danych (Merge)
     df = pd.merge(df_age, df_details, on=['Rok', 'KWP', C_TOTAL])
     df = pd.merge(df, df_deaths[['Rok', 'KWP', C_DEATHS]], on=['Rok', 'KWP'])
-    df = pd.merge(df, df_edu[['Rok', 'KWP', C_HIGHER_EDU, C_SINGLE, C_UNEMPLOYED]], on=['Rok', 'KWP'])
+    df = pd.merge(df, df_edu[['Rok', 'KWP'] + all_edu_raw], on=['Rok', 'KWP'])
 
-    eda_raw_cols = [C_TOTAL, C_DEATHS, C_HIGHER_EDU, C_MALE, C_FEMALE, C_SOBER, C_SINGLE, C_UNEMPLOYED]
-    other_data_cols = [c for c in df.columns if any(k in c for k in ['Grupa', 'Dzień', 'Źródło', 'Stan', 'Informac', 'Kontakt'])]
-    
-    cols_to_convert = list(set(eda_raw_cols + other_data_cols)) # set usuwa duplikaty
-    
-    for col in cols_to_convert:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
-    # --- AGREGACJA DO POZIOMU WOJEWÓDZTWA ---
-    # Dodajemy województwo do surowych danych
+    # 4. Agregacja Mazowsza
     df['Województwo'] = df['KWP'].map(kwp_to_wojewodztwo)
     
-    # Wybieramy kolumny numeryczne do zsumowania (wszystkie dane surowe)
-    numeric_cols = [c for c in cols_to_convert if c in df.columns]
+    # Lista wszystkich surowych kolumn do zsumowania
+    raw_numeric = list(set([C_TOTAL, C_DEATHS, C_MALE, C_FEMALE, C_SOBER] + all_edu_raw + \
+                  [c for c in df.columns if any(k in c for k in ['Grupa', 'Dzień', 'Źródło', 'Stan', 'Informac', 'Kontakt'])]))
     
-    # Grupowanie po Roku i Województwie
-    df = df.groupby(['Rok', 'Województwo'])[numeric_cols].sum().reset_index()
+    for col in raw_numeric:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # SUMUJEMY LICZBY DLA WOJEWÓDZTW (Warszawa + Radom = jeden wiersz)
+    df_agg = df.groupby(['Rok', 'Województwo'])[raw_numeric].sum().reset_index()
+    df_agg['KWP'] = df_agg['Województwo']
     
-    # Przypisujemy nazwę województwa do KWP, aby zachować spójność z final_cols
-    df['KWP'] = df['Województwo']
+    total = df_agg[C_TOTAL]
 
-    # Definiujemy total na zagregowanych danych
-    total = df[C_TOTAL]
-
-    # --- OBLICZENIA (Wskaźniki EDA) ---
-    df['target_mortality_rate'] = (df[C_DEATHS] / total).fillna(0)
-    df['male_pct'] = (df[C_MALE] / total).fillna(0)
-    df['female_pct'] = (df[C_FEMALE] / total).fillna(0)
-    df['education_higher_pct'] = (df[C_HIGHER_EDU] / total).fillna(0)
-    df['single_pct'] = (df[C_SINGLE] / total).fillna(0)
-    df['unemployed_pct'] = (df[C_UNEMPLOYED] / total).fillna(0)
-    df['sober_pct'] = (df[C_SOBER] / total).fillna(0)
-
-    # Wiek - Agregacja
-    def sum_keywords(dataframe, keywords):
-        cols = [dataframe.columns[i] for i, c in enumerate(dataframe.columns) if any(k in c for k in keywords)]
+    # 5. OBLICZENIA WSKAŹNIKÓW (Na zagregowanych sumach)
+    res = pd.DataFrame()
+    res['Rok'] = df_agg['Rok']; res['KWP'] = df_agg['KWP']; res['Województwo'] = df_agg['Województwo']
+    
+    res['target_mortality_rate'] = (df_agg[C_DEATHS] / total).fillna(0)
+    res['male_pct'] = (df_agg[C_MALE] / total).fillna(0)
+    res['female_pct'] = (df_agg[C_FEMALE] / total).fillna(0)
+    res['sober_pct'] = (df_agg[C_SOBER] / total).fillna(0)
+    
+    # Edukacja (Agregaty)
+    res['edu_low_pct'] = df_agg[edu_low].sum(axis=1) / total
+    res['edu_mid_pct'] = df_agg[edu_mid].sum(axis=1) / total
+    res['edu_higher_pct'] = df_agg[edu_high].sum(axis=1) / total
+    res['edu_unknown_pct'] = df_agg[edu_unkn].sum(axis=1) / total
+    
+    # Wiek i Cechy Suicydologiczne
+    def sum_k(dataframe, keywords):
+        cols = [c for c in dataframe.columns if any(k in c for k in keywords)]
         return dataframe[cols].sum(axis=1)
 
-    df['youth_pct'] = sum_keywords(df, ["'0-6'", "'7-12'", "'13-18'"]) / total
-    df['young_adult_pct'] = sum_keywords(df, ["'19-24'", "'25-29'", "'30-34'"]) / total
-    df['middle_age_pct'] = sum_keywords(df, ["'35-39'", "'40-44'", "'45-49'", "'50-54'", "'55-59'"]) / total
-    df['senior_pct'] = sum_keywords(df, ["'60-64'", "'65-69'", "'70-74'", "'75-79'", "'80-84'", "'85+'"]) / total
-
-    # Stabilność dochodów (SES)
-    stable = sum_keywords(df, ["Praca", "Emerytura", "Renta"])
-    unstable = sum_keywords(df, ["Nie ma stałego źródła", "Zasiłek"])
-    df['SES_instability_index'] = (unstable - stable) / total
-    df['substances_pct'] = sum_keywords(df, ["alkoholu", "odurzających", "leków", "dopalaczy"]) / total
-
-# Instytucje i Czas
-    inst_cols = [c for c in df.columns if 'Kontakt z instytucjami' in c and 'Brak możliwości' not in c]
-    df['institution_contact_pct'] = df[inst_cols].sum(axis=1) / total
-    df['weekend_pct'] = sum_keywords(df, ["sobota", "niedziela"]) / total
-
-    # Czas
-    df['weekend_pct'] = sum_keywords(df, ["sobota", "niedziela"]) / total
-
-# Selekcja końcowa (rozszerzona o EDA)
-    final_cols = [
-        'Rok', 'KWP', 'Województwo', 'target_mortality_rate', 
-        'male_pct', 'female_pct', 'youth_pct', 'young_adult_pct', 
-        'middle_age_pct', 'senior_pct', 'education_higher_pct', 
-        'single_pct', 'unemployed_pct', 'SES_instability_index', 
-        'substances_pct', 'sober_pct', 'institution_contact_pct', 'weekend_pct'
-    ]
+    res['youth_pct'] = sum_k(df_agg, ["'0-6'", "'7-12'", "'13-18'"]) / total
+    res['young_adult_pct'] = sum_k(df_agg, ["'19-24'", "'25-29'", "'30-34'"]) / total
+    res['middle_age_pct'] = sum_k(df_agg, ["'35-39'", "'40-44'", "'45-49'", "'50-54'", "'55-59'"]) / total
+    res['senior_pct'] = sum_k(df_agg, ["'60-64'", "'65-69'", "'70-74'", "'75-79'", "'80-84'", "'85+'"]) / total
+    res['substances_pct'] = sum_k(df_agg, ["alkoholu", "odurzających", "leków", "dopalaczy"]) / total
     
-    return df[final_cols].round(4)
+    stable = sum_k(df_agg, ["Praca", "Emerytura", "Renta"])
+    unstable = sum_k(df_agg, ["Nie ma stałego źródła", "Zasiłek"])
+    res['SES_instability_index'] = (unstable - stable) / total
+    res['weekend_pct'] = sum_k(df_agg, ["sobota", "niedziela"]) / total
+    
+    return res.round(4)
 
-
-
-# --- URUCHOMIENIE I ZAPIS ---
+# --- URUCHOMIENIE ---
 try:
-    df_eda = create_features_eda(paths)
-    if df_eda is not None:
-        df_eda.to_csv("final_suicide_features_with_eda.csv", index=False)
+    df_final = create_features_eda(paths)
+    if df_final is not None:
+        df_final.to_csv("final_suicide_features_with_eda.csv", index=False)
         with open('dane_eda.pkl', 'wb') as f:
-            pickle.dump(df_eda, f)
-        print("✅ Sukces! Plik 'dane_eda.pkl' został zapisany.")
-        print(df_eda.head())
+            pickle.dump(df_final, f)
+        print("✅ Sukces! Wygenerowano plik 'dane_eda.pkl' z nowymi kategoriami edukacji.")
+        print(df_final.head())
+        print(df_final.columns)
 except Exception as e:
-    print(f"❌ Błąd: {e}")
-
+    print(f"❌ Błąd krytyczny: {e}")
