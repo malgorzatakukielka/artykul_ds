@@ -76,7 +76,7 @@ def create_features(files_dict):
     if any(d is None for d in [df_age, df_deaths, df_details, df_edu]):
         return None
 
-    # Dynamiczne znajdowanie głównych kolumn (odporne na literówki i \n)
+    # Dynamiczne znajdowanie głównych kolumn
     C_TOTAL = find_col(df_age, "ogółem (PRÓBY I ZAKOŃCZONE ZGONEM)")
     C_DEATHS = find_col(df_deaths, "zakończonych zgonem")
     C_HIGHER_EDU = find_col(df_edu, "Wykształcenie - Wyższe")
@@ -95,6 +95,20 @@ def create_features(files_dict):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
+    # --- AGREGACJA DO POZIOMU WOJEWÓDZTWA ---
+    # Dodajemy województwo do surowych danych
+    df['Województwo'] = df['KWP'].map(kwp_to_wojewodztwo)
+    
+    # Wybieramy kolumny numeryczne do zsumowania (wszystkie dane surowe)
+    numeric_cols = [c for c in cols_to_convert if c in df.columns]
+    
+    # Grupowanie po Roku i Województwie - to łączy KSP Warszawa i KWP Radom w jeden rekord
+    df = df.groupby(['Rok', 'Województwo'])[numeric_cols].sum().reset_index()
+    
+    # Przypisujemy nazwę województwa do KWP, aby zachować spójność z final_cols
+    df['KWP'] = df['Województwo']
+
+    # Definiujemy total na zagregowanych danych
     total = df[C_TOTAL]
 
     # --- OBLICZENIA (FEATURE ENGINEERING) ---
@@ -127,9 +141,7 @@ def create_features(files_dict):
     # Czas
     df['weekend_pct'] = sum_cols(df, ["sobota", "niedziela"]) / total
 
-    df['Województwo'] = df['KWP'].map(kwp_to_wojewodztwo)
-
-    # Selekcja końcowa
+    # Selekcja końcowa (KWP teraz zawiera nazwę województwa)
     final_cols = [
         'Rok', 'KWP', 'Województwo', 'target_mortality_rate', 'male_pct', 'education_higher_pct',
         'youth_pct', 'young_adult_pct', 'middle_age_pct', 'senior_pct',
