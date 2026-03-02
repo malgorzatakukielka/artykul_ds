@@ -47,7 +47,6 @@ def generate_maps():
     for year in years:
         print(f"Generowanie mapy za rok {year}...")
         
-        # Filtrowanie i agregacja (Mazowsze ma 2 wpisy KWP, bierzemy średnią)
         df_year = df[df['Rok'] == year].groupby('Województwo')['target_mortality_rate'].mean().reset_index()
         
         # Łączenie danych tabelarycznych z mapą
